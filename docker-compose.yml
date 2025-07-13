@@ -1,0 +1,113 @@
+# docker-compose.yml
+# Fixed port conflicts while keeping Airflow
+
+version: '3.8'
+
+services:
+  # Main PostgreSQL (avoiding your Supabase port 5432)
+  postgres:
+    image: postgres:13
+    container_name: ecommerce_postgres
+    environment:
+      POSTGRES_DB: ecommerce_analytics
+      POSTGRES_USER: analytics_user
+      POSTGRES_PASSWORD: analytics_pass
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5434:5432"  # Changed to avoid Supabase conflict
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - analytics_network
+    restart: unless-stopped
+
+  # Airflow Database (separate from main analytics DB)
+  airflow-db:
+    image: postgres:13
+    container_name: airflow_postgres
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    networks:
+      - analytics_network
+
+  # Airflow Webserver (changed port to avoid conflicts)
+  airflow-webserver:
+    image: apache/airflow:2.7.1
+    container_name: airflow_webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: true
+      AIRFLOW__CORE__LOAD_EXAMPLES: false
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: true
+      # Fix Airflow startup issues
+      AIRFLOW__WEBSERVER__SECRET_KEY: your_secret_key_here
+      AIRFLOW_UID: 50000
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data
+    ports:
+      - "8083:8080"  # Changed from 8080 to avoid conflicts
+    networks:
+      - analytics_network
+    depends_on:
+      - airflow-db
+      - postgres
+    command: >
+      bash -c "
+        airflow db init &&
+        airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin123 &&
+        airflow webserver
+      "
+    restart: unless-stopped
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    image: apache/airflow:2.7.1
+    container_name: airflow_scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: true
+      AIRFLOW__CORE__LOAD_EXAMPLES: false
+      AIRFLOW_UID: 50000
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data
+    networks:
+      - analytics_network
+    depends_on:
+      - airflow-db
+      - postgres
+    command: airflow scheduler
+    restart: unless-stopped
+
+  # pgAdmin (changed port to avoid conflicts)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: ecommerce_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@analytics.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "8082:80"  # Changed from 8081
+    networks:
+      - analytics_network
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  airflow_db_data:
+
+networks:
+  analytics_network:
+    driver: bridge

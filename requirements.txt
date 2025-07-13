@@ -1,0 +1,11 @@
+pandas
+numpy
+faker
+python-dotenv
+psycopg2-binary
+sqlalchemy
+apache-airflow==2.7.1
+fastapi
+uvicorn
+pytest
+jupyter
