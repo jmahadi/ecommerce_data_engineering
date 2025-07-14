@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-Ran into a bunch of issues while building this project. Here's how I solved them in case anyone else runs into the same problems.
+Ran into a bunch of issues while building this project using a Windows operating system. Here's how I solved them in case anyone else runs into the same problems.
 
 ## Docker & Container Issues
 
@@ -12,11 +12,9 @@ docker-compose logs postgres
 
 # Common fixes:
 # 1. Port 5434 already in use
-sudo lsof -i :5434
-# Kill whatever's using it or change port in docker-compose.yml
-
-# 2. Permission issues with data volume
-sudo chown -R 999:999 postgres_data/
+netstat -ano | findstr :5434
+# 2.Kill whatever's using it or change port in docker-compose.yml
+Stop-Process -Id 1234 -Force
 
 # 3. Nuclear option - rebuild everything
 docker-compose down -v
@@ -43,13 +41,7 @@ docker-compose restart airflow-webserver
 # Check resource usage
 docker stats
 
-# If PostgreSQL using too much memory, add to docker-compose.yml:
-# postgres:
-#   environment:
-#     - POSTGRES_SHARED_BUFFERS=128MB
-#     - POSTGRES_EFFECTIVE_CACHE_SIZE=512MB
-
-# Or just restart everything periodically
+# restart everything periodically
 docker-compose restart
 ```
 
@@ -134,23 +126,6 @@ docker-compose logs airflow-scheduler
 docker-compose exec airflow-webserver airflow tasks run dag_id task_id 2024-01-01
 ```
 
-### ExternalTaskSensor Timeout
-**Problem**: DAGs waiting forever for other DAGs
-```python
-# I removed these from my final DAGs but if you have them:
-# Either increase timeout or remove dependency
-
-# Before:
-wait_for_warehouse = ExternalTaskSensor(
-    task_id='wait_for_warehouse',
-    external_dag_id='warehouse_transformation',
-    timeout=300  # Increase this
-)
-
-# After (what I did):
-# Just removed it and run DAGs manually in sequence
-```
-
 ## ngrok & Dashboard Issues
 
 ### ngrok TCP Tunnel Requires Payment  
@@ -212,28 +187,9 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO analytics_user;
 # 2. Export dashboard to PDF as backup
 # 3. Use paid ngrok for stable URLs
 
-# Quick recovery:
-# 1. Stop ngrok (Ctrl+C)
-# 2. Restart: ngrok tcp 5434
-# 3. Update data source URL in Looker Studio
 ```
 
 ## Data Pipeline Issues
-
-### CSV Loading Fails
-**Problem**: staging_data_ingestion DAG fails
-```python
-# Common issues:
-# 1. File not found - check paths match
-# 2. Permission errors - check file permissions  
-# 3. Data type errors - check CSV format
-
-# Debug in Python:
-import pandas as pd
-df = pd.read_csv('/opt/airflow/data/customers.csv')
-print(df.dtypes)
-print(df.head())
-```
 
 ### Warehouse Transform Fails
 **Problem**: Type casting errors, foreign key violations
@@ -242,82 +198,14 @@ print(df.head())
 \d staging.customers
 \d warehouse.dim_customers
 
--- Common fixes:
 -- Add explicit casting in SQL:
 SELECT column_name::date, other_column::numeric
 
--- Check for null values causing issues:
-SELECT * FROM staging.customers WHERE customer_id IS NULL;
 ```
 
-### Analytics Aggregation Takes Forever
-**Problem**: Analytics DAG runs for hours
-```sql
--- Check table sizes:
-SELECT 
-    schemaname,
-    tablename, 
-    n_tup_ins as rows
-FROM pg_stat_user_tables 
-ORDER BY n_tup_ins DESC;
-
--- Add indexes if missing:
-CREATE INDEX IF NOT EXISTS idx_orders_customer ON warehouse.fact_orders(customer_key);
-CREATE INDEX IF NOT EXISTS idx_orders_date ON warehouse.fact_orders(order_date_key);
-```
-
-## Performance Issues
-
-### Queries Running Slow
-```sql
--- Check for missing indexes:
-EXPLAIN ANALYZE SELECT * FROM warehouse.fact_orders 
-WHERE customer_key = 123;
-
--- Add indexes on frequently joined columns:
-CREATE INDEX IF NOT EXISTS idx_fact_orders_customer ON warehouse.fact_orders(customer_key);
-CREATE INDEX IF NOT EXISTS idx_fact_orders_date ON warehouse.fact_orders(order_date_key);
-```
-
-### Docker Using Too Much Disk
-```bash
-# Clean up Docker
-docker system prune -a
-
-# Check space usage
-docker system df
-
-# Remove old volumes if needed (WARNING: loses data)
-docker volume prune
-```
-
-## General Debugging Tips
-
-1. **Check logs first**: Almost every issue shows up in logs
-   ```bash
-   docker-compose logs [service-name]
-   ```
-
-2. **Test connections step by step**: 
-   - Local DB → ngrok → external access
-   - Each DAG individually
-
-3. **Use Airflow UI**: 
-   - Task logs show detailed error messages
-   - Graph view shows dependencies
-
-4. **Keep it simple**: 
-   - If something complex isn't working, try simpler version first
-   - Remove dependencies when debugging
-
-5. **Export/backup early**: 
-   - Take screenshots of working dashboards
-   - Export data to CSV if needed
 
 Most issues I ran into were related to:
 - Docker port conflicts  
 - Missing permissions/schemas
 - ngrok connection stability
 - Data type mismatches
-
-The key is methodical debugging - check each component individually before looking at the whole system.
