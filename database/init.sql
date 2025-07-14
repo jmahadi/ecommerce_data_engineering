@@ -378,6 +378,45 @@ CREATE TABLE analytics.daily_sales (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Monthly Sales Trends 
+CREATE TABLE analytics.monthly_trends (
+    year INTEGER,
+    month_number INTEGER,
+    month_name VARCHAR(10),
+    quarter INTEGER,
+    total_orders INTEGER,
+    total_revenue DECIMAL(12,2),
+    total_profit DECIMAL(12,2),
+    avg_order_value DECIMAL(10,2),
+    unique_customers INTEGER,
+    PRIMARY KEY (year, month_number),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Customer Acquisition Analysis
+CREATE TABLE analytics.customer_acquisition (
+    customer_id VARCHAR(20) PRIMARY KEY,
+    registration_date DATE,
+    first_order_date DATE,
+    days_to_first_purchase INTEGER,
+    first_order_value DECIMAL(10,2),
+    acquisition_category VARCHAR(20),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Campaign Attribution 
+CREATE TABLE analytics.campaign_attribution (
+    campaign_id VARCHAR(20) PRIMARY KEY,
+    campaign_name VARCHAR(255),
+    campaign_start_date DATE,
+    campaign_end_date DATE,
+    total_revenue_during_period DECIMAL(12,2),
+    total_orders_during_period INTEGER,
+    revenue_per_day DECIMAL(10,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ===================================
 -- Indexes for Performance
 -- ===================================
@@ -394,3 +433,10 @@ CREATE INDEX idx_dim_customers_segment ON warehouse.dim_customers(customer_segme
 CREATE INDEX idx_dim_products_category ON warehouse.dim_products(category);
 CREATE INDEX idx_fact_orders_date_key ON warehouse.fact_orders(order_date_key);
 CREATE INDEX idx_fact_orders_customer_key ON warehouse.fact_orders(customer_key);
+
+--Analytics indexes
+CREATE INDEX idx_customer_metrics_segment ON analytics.customer_metrics(customer_segment);
+CREATE INDEX idx_customer_metrics_churn ON analytics.customer_metrics(churn_risk_score);
+CREATE INDEX idx_product_metrics_revenue ON analytics.product_metrics(total_revenue DESC);
+CREATE INDEX idx_daily_sales_date ON analytics.daily_sales(sales_date);
+CREATE INDEX idx_monthly_trends_quarter ON analytics.monthly_trends(year, quarter);

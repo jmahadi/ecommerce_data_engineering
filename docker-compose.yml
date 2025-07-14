@@ -53,7 +53,7 @@ services:
       - ./airflow/logs:/opt/airflow/logs
       - ./data:/opt/airflow/data
     ports:
-      - "8083:8080"  # Changed from 8080 to avoid conflicts
+      - "8083:8080"  # Changed to avoid Supabase conflict
     networks:
       - analytics_network
     depends_on:
@@ -89,7 +89,7 @@ services:
     command: airflow scheduler
     restart: unless-stopped
 
-  # pgAdmin (changed port to avoid conflicts)
+  # pgAdmin 
   pgadmin:
     image: dpage/pgadmin4
     container_name: ecommerce_pgadmin
@@ -97,17 +97,21 @@ services:
       PGADMIN_DEFAULT_EMAIL: admin@analytics.com
       PGADMIN_DEFAULT_PASSWORD: admin123
     ports:
-      - "8082:80"  # Changed from 8081
+      - "8082:80" 
     networks:
       - analytics_network
     depends_on:
       - postgres
     restart: unless-stopped
 
+
 volumes:
   postgres_data:
   airflow_db_data:
+ 
 
 networks:
   analytics_network:
     driver: bridge
+
+

@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.sensors.external_task import ExternalTaskSensor
 from sqlalchemy import create_engine, text
 import logging
 
@@ -285,6 +284,147 @@ def load_order_items_fact():
     finally:
         engine.dispose()
 
+def load_inventory_fact():
+    """Load inventory fact table using DELETE + INSERT pattern"""
+    logging.info("Loading inventory fact table...")
+    
+    engine = get_db_connection()
+    
+    try:
+        # Step 1: Clear existing data
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM warehouse.fact_inventory;"))
+        
+        logging.info("Inventory table cleared")
+        
+        # Step 2: Insert fresh data
+        inventory_sql = text("""
+        INSERT INTO warehouse.fact_inventory
+        (product_key, warehouse_location, current_stock, reserved_stock, reorder_point, 
+         max_stock, last_restocked_key, supplier_id, lead_time_days)
+        SELECT 
+            p.product_key,
+            i.warehouse_location,
+            i.current_stock,
+            i.reserved_stock,
+            i.reorder_point,
+            i.max_stock,
+            COALESCE(t.time_key, 20240708) as last_restocked_key,
+            i.supplier_id,
+            i.lead_time_days
+        FROM staging.inventory i
+        JOIN warehouse.dim_products p ON i.product_id = p.product_id AND p.is_current = true
+        LEFT JOIN warehouse.dim_time t ON i.last_restocked::date = t.full_date;
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(inventory_sql)
+        
+        logging.info("Inventory fact table loaded successfully")
+        
+    except Exception as e:
+        logging.error(f"Failed to load inventory fact table: {e}")
+        raise
+    finally:
+        engine.dispose()
+
+def load_marketing_campaigns_dimension():
+    """Load marketing campaigns dimension (includes all metrics) using DELETE + INSERT"""
+    logging.info("Loading marketing campaigns dimension...")
+    
+    engine = get_db_connection()
+    
+    try:
+        # Step 1: Clear existing data
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM warehouse.dim_marketing_campaigns;"))
+        
+        logging.info("Marketing campaigns table cleared")
+        
+        # Step 2: Insert fresh data (all campaign info + metrics)
+        campaigns_sql = text("""
+        INSERT INTO warehouse.dim_marketing_campaigns
+        (campaign_id, campaign_name, channel, start_date_key, end_date_key, 
+         budget, target_audience, objective, impressions, clicks, conversions,
+         cost_per_click, conversion_rate, roi, is_active)
+        SELECT 
+            mc.campaign_id,
+            mc.campaign_name,
+            mc.channel,
+            COALESCE(t1.time_key, 20240708) as start_date_key,
+            COALESCE(t2.time_key, 20240708) as end_date_key,
+            mc.budget,
+            mc.target_audience,
+            mc.objective,
+            mc.impressions,
+            mc.clicks,
+            mc.conversions,
+            mc.cost_per_click,
+            mc.conversion_rate,
+            mc.roi,
+            mc.is_active
+        FROM staging.marketing_campaigns mc
+        LEFT JOIN warehouse.dim_time t1 ON mc.start_date::date = t1.full_date
+        LEFT JOIN warehouse.dim_time t2 ON mc.end_date::date = t2.full_date;
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(campaigns_sql)
+        
+        logging.info("Marketing campaigns dimension loaded successfully")
+        
+    except Exception as e:
+        logging.error(f"Failed to load marketing campaigns dimension: {e}")
+        raise
+    finally:
+        engine.dispose()
+
+def load_clickstream_fact():
+    """Load clickstream fact table using DELETE + INSERT pattern"""
+    logging.info("Loading clickstream fact table...")
+    
+    engine = get_db_connection()
+    
+    try:
+        # Step 1: Clear existing data
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM warehouse.fact_clickstream;"))
+        
+        logging.info("Clickstream table cleared")
+        
+        # Step 2: Insert fresh data
+        clickstream_sql = text("""
+        INSERT INTO warehouse.fact_clickstream
+        (event_id, customer_key, product_key, event_date_key, event_type, 
+         session_id, device_type, browser, duration_seconds, timestamp)
+        SELECT 
+            cs.event_id,
+            c.customer_key,
+            p.product_key,
+            COALESCE(t.time_key, 20240708) as event_date_key,
+            cs.event_type,
+            cs.session_id,
+            cs.device_type,
+            cs.browser,
+            cs.duration_seconds,
+            cs.timestamp::timestamp as timestamp
+        FROM staging.clickstream cs
+        LEFT JOIN warehouse.dim_customers c ON cs.customer_id = c.customer_id AND c.is_current = true
+        LEFT JOIN warehouse.dim_products p ON cs.product_id = p.product_id AND p.is_current = true
+        LEFT JOIN warehouse.dim_time t ON cs.timestamp::date = t.full_date;
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(clickstream_sql)
+        
+        logging.info("Clickstream fact table loaded successfully")
+        
+    except Exception as e:
+        logging.error(f"Failed to load clickstream fact table: {e}")
+        raise
+    finally:
+        engine.dispose()
+
 def create_warehouse_indexes():
     """Create indexes on warehouse tables for query performance"""
     logging.info("Creating warehouse indexes...")
@@ -348,148 +488,6 @@ def validate_warehouse_data():
         engine.dispose()
 
 
-def load_inventory_fact():
-    """Load inventory fact table using DELETE + INSERT pattern"""
-    logging.info("Loading inventory fact table...")
-    
-    engine = get_db_connection()
-    
-    try:
-        # Step 1: Clear existing data
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM warehouse.fact_inventory;"))
-        
-        logging.info("Inventory table cleared")
-        
-        # Step 2: Insert fresh data
-        inventory_sql = text("""
-        INSERT INTO warehouse.fact_inventory
-        (product_key, warehouse_location, current_stock, reserved_stock, reorder_point, 
-         max_stock, last_restocked_key, supplier_id, lead_time_days)
-        SELECT 
-            p.product_key,
-            i.warehouse_location,
-            i.current_stock,
-            i.reserved_stock,
-            i.reorder_point,
-            i.max_stock,
-            COALESCE(t.time_key, 20240701) as last_restocked_key,
-            i.supplier_id,
-            i.lead_time_days
-        FROM staging.inventory i
-        JOIN warehouse.dim_products p ON i.product_id = p.product_id AND p.is_current = true
-        LEFT JOIN warehouse.dim_time t ON i.last_restocked = t.full_date;
-        """)
-        
-        with engine.begin() as conn:
-            conn.execute(inventory_sql)
-        
-        logging.info("Inventory fact table loaded successfully")
-        
-    except Exception as e:
-        logging.error(f"Failed to load inventory fact table: {e}")
-        raise
-    finally:
-        engine.dispose()
-
-def load_marketing_campaigns_dimension():
-    """Load marketing campaigns dimension (includes all metrics) using DELETE + INSERT"""
-    logging.info("Loading marketing campaigns dimension...")
-    
-    engine = get_db_connection()
-    
-    try:
-        # Step 1: Clear existing data
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM warehouse.dim_marketing_campaigns;"))
-        
-        logging.info("Marketing campaigns table cleared")
-        
-        # Step 2: Insert fresh data (all campaign info + metrics)
-        campaigns_sql = text("""
-        INSERT INTO warehouse.dim_marketing_campaigns
-        (campaign_id, campaign_name, channel, start_date_key, end_date_key, 
-         budget, target_audience, objective, impressions, clicks, conversions,
-         cost_per_click, conversion_rate, roi, is_active)
-        SELECT 
-            mc.campaign_id,
-            mc.campaign_name,
-            mc.channel,
-            COALESCE(t1.time_key, 20240701) as start_date_key,
-            COALESCE(t2.time_key, 20240701) as end_date_key,
-            mc.budget,
-            mc.target_audience,
-            mc.objective,
-            mc.impressions,
-            mc.clicks,
-            mc.conversions,
-            mc.cost_per_click,
-            mc.conversion_rate,
-            mc.roi,
-            mc.is_active
-        FROM staging.marketing_campaigns mc
-        LEFT JOIN warehouse.dim_time t1 ON mc.start_date = t1.full_date
-        LEFT JOIN warehouse.dim_time t2 ON mc.end_date = t2.full_date;
-        """)
-        
-        with engine.begin() as conn:
-            conn.execute(campaigns_sql)
-        
-        logging.info("Marketing campaigns dimension loaded successfully")
-        
-    except Exception as e:
-        logging.error(f"Failed to load marketing campaigns dimension: {e}")
-        raise
-    finally:
-        engine.dispose()
-
-def load_clickstream_fact():
-    """Load clickstream fact table using DELETE + INSERT pattern"""
-    logging.info("Loading clickstream fact table...")
-    
-    engine = get_db_connection()
-    
-    try:
-        # Step 1: Clear existing data
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM warehouse.fact_clickstream;"))
-        
-        logging.info("Clickstream table cleared")
-        
-        # Step 2: Insert fresh data
-        clickstream_sql = text("""
-        INSERT INTO warehouse.fact_clickstream
-        (event_id, customer_key, product_key, event_date_key, event_type, 
-         session_id, device_type, browser, duration_seconds, timestamp)
-        SELECT 
-            cs.event_id,
-            c.customer_key,
-            p.product_key,
-            COALESCE(t.time_key, 20240701) as event_date_key,
-            cs.event_type,
-            cs.session_id,
-            cs.device_type,
-            cs.browser,
-            cs.duration_seconds,
-            cs.timestamp
-        FROM staging.clickstream cs
-        LEFT JOIN warehouse.dim_customers c ON cs.customer_id = c.customer_id AND c.is_current = true
-        LEFT JOIN warehouse.dim_products p ON cs.product_id = p.product_id AND p.is_current = true
-        LEFT JOIN warehouse.dim_time t ON cs.timestamp::date = t.full_date;
-        """)
-        
-        with engine.begin() as conn:
-            conn.execute(clickstream_sql)
-        
-        logging.info("Clickstream fact table loaded successfully")
-        
-    except Exception as e:
-        logging.error(f"Failed to load clickstream fact table: {e}")
-        raise
-    finally:
-        engine.dispose()
-
-
 # Define transformation tasks
 transform_customers_task = PythonOperator(
     task_id='transform_customers_dimension',
@@ -521,18 +519,6 @@ load_order_items_fact_task = PythonOperator(
     dag=dag
 )
 
-create_indexes_task = PythonOperator(
-    task_id='create_warehouse_indexes',
-    python_callable=create_warehouse_indexes,
-    dag=dag
-)
-
-validate_warehouse_task = PythonOperator(
-    task_id='validate_warehouse_data',
-    python_callable=validate_warehouse_data,
-    dag=dag
-)
-
 load_inventory_fact_task = PythonOperator(
     task_id='load_inventory_fact',
     python_callable=load_inventory_fact,
@@ -551,12 +537,24 @@ load_clickstream_fact_task = PythonOperator(
     dag=dag
 )
 
+create_indexes_task = PythonOperator(
+    task_id='create_warehouse_indexes',
+    python_callable=create_warehouse_indexes,
+    dag=dag
+)
 
+validate_warehouse_task = PythonOperator(
+    task_id='validate_warehouse_data',
+    python_callable=validate_warehouse_data,
+    dag=dag
+)
+
+# Task Dependencies - No external sensors needed for initial load
 # Core transformations run in parallel
 [transform_customers_task, transform_products_task, load_time_task] >> load_orders_fact_task
 load_orders_fact_task >> load_order_items_fact_task
 
-# New transformations run in parallel with core ones
+# Additional transformations run in parallel with core ones
 [transform_customers_task, transform_products_task, load_time_task] >> load_inventory_fact_task
 [transform_customers_task, transform_products_task, load_time_task] >> load_marketing_campaigns_task  
 [transform_customers_task, transform_products_task, load_time_task] >> load_clickstream_fact_task
