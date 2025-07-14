@@ -174,182 +174,6 @@ def create_daily_sales_summary():
     finally:
         engine.dispose()
 
-def create_marketing_campaign_roi():
-    """Calculate marketing campaign ROI if data exists"""
-    logging.info("Creating marketing campaign ROI...")
-    
-    engine = get_db_connection()
-    
-    # Simple ROI calculation based on campaign period
-    roi_sql = text("""
-    -- This is a simplified version since we don't have direct attribution
-    INSERT INTO analytics.campaign_roi 
-    (campaign_id, campaign_name, total_revenue, total_orders, roi_estimate, campaign_period)
-    SELECT 
-        mc.campaign_id,
-        mc.campaign_name,
-        COALESCE(SUM(ds.total_revenue), 0) as total_revenue,
-        COALESCE(SUM(ds.total_orders), 0) as total_orders,
-        CASE 
-            WHEN mc.budget > 0 THEN COALESCE(SUM(ds.total_revenue), 0) / mc.budget 
-            ELSE 0 
-        END as roi_estimate,
-        mc.start_date || ' to ' || mc.end_date as campaign_period
-    FROM staging.marketing_campaigns mc
-    LEFT JOIN analytics.daily_sales ds ON ds.sales_date BETWEEN mc.start_date AND mc.end_date
-    GROUP BY mc.campaign_id, mc.campaign_name, mc.budget, mc.start_date, mc.end_date
-    ON CONFLICT (campaign_id) DO UPDATE SET
-        total_revenue = EXCLUDED.total_revenue,
-        total_orders = EXCLUDED.total_orders,
-        roi_estimate = EXCLUDED.roi_estimate,
-        updated_at = CURRENT_TIMESTAMP;
-    """)
-    
-    try:
-        with engine.begin() as conn:
-            # Check if marketing campaigns table exists and has data
-            check_result = conn.execute(text("SELECT COUNT(*) FROM staging.marketing_campaigns")).fetchone()
-            
-            if check_result[0] > 0:
-                # Create campaign_roi table if it doesn't exist
-                create_table_sql = text("""
-                CREATE TABLE IF NOT EXISTS analytics.campaign_roi (
-                    campaign_id VARCHAR(20) PRIMARY KEY,
-                    campaign_name VARCHAR(255),
-                    total_revenue DECIMAL(12,2),
-                    total_orders INTEGER,
-                    roi_estimate DECIMAL(8,2),
-                    campaign_period TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """)
-                conn.execute(create_table_sql)
-                
-                result = conn.execute(roi_sql)
-                logging.info("Marketing campaign ROI created successfully")
-            else:
-                logging.info("No marketing campaign data found, skipping ROI calculation")
-        
-    except Exception as e:
-        logging.error(f"Failed to create marketing ROI: {e}")
-        # Don't raise error for optional table
-        pass
-    finally:
-        engine.dispose()
-
-def create_business_summary_views():
-    """Create summary views for dashboard consumption"""
-    logging.info("Creating business summary views...")
-    
-    engine = get_db_connection()
-    
-    # Create a view for executive dashboard
-    exec_summary_sql = text("""
-    CREATE OR REPLACE VIEW analytics.executive_summary AS
-    SELECT 
-        COUNT(DISTINCT cm.customer_id) as total_customers,
-        COUNT(DISTINCT CASE WHEN cm.churn_risk_score < 0.5 THEN cm.customer_id END) as active_customers,
-        SUM(cm.total_spent) as total_revenue,
-        AVG(cm.avg_order_value) as avg_order_value,
-        COUNT(DISTINCT pm.product_id) as total_products,
-        AVG(pm.profit_margin) as avg_profit_margin,
-        COUNT(DISTINCT ds.sales_date) as days_with_sales,
-        MAX(ds.sales_date) as last_sales_date
-    FROM analytics.customer_metrics cm
-    CROSS JOIN analytics.product_metrics pm
-    CROSS JOIN analytics.daily_sales ds;
-    """)
-    
-    # Create a view for top performing products
-    top_products_sql = text("""
-    CREATE OR REPLACE VIEW analytics.top_products AS
-    SELECT 
-        p.product_id,
-        p.product_name,
-        p.category,
-        pm.total_revenue,
-        pm.total_quantity_sold,
-        pm.profit_margin,
-        RANK() OVER (ORDER BY pm.total_revenue DESC) as revenue_rank
-    FROM warehouse.dim_products p
-    JOIN analytics.product_metrics pm ON p.product_id = pm.product_id
-    WHERE p.is_current = true
-    ORDER BY pm.total_revenue DESC
-    LIMIT 20;
-    """)
-    
-    # Create customer segmentation view
-    customer_segments_sql = text("""
-    CREATE OR REPLACE VIEW analytics.customer_segmentation AS
-    SELECT 
-        customer_segment,
-        COUNT(*) as customer_count,
-        SUM(total_spent) as segment_revenue,
-        AVG(total_spent) as avg_customer_value,
-        AVG(churn_risk_score) as avg_churn_risk
-    FROM analytics.customer_metrics
-    GROUP BY customer_segment
-    ORDER BY segment_revenue DESC;
-    """)
-    
-    # Create seasonal trends view
-    seasonal_trends_sql = text("""
-    CREATE OR REPLACE VIEW analytics.seasonal_performance AS
-    SELECT 
-        quarter,
-        SUM(total_revenue) as quarter_revenue,
-        AVG(total_revenue) as avg_monthly_revenue,
-        SUM(total_orders) as quarter_orders,
-        AVG(avg_order_value) as avg_order_value
-    FROM analytics.monthly_trends
-    GROUP BY quarter
-    ORDER BY quarter;
-    """)
-    
-    # Create acquisition summary view  
-    acquisition_summary_sql = text("""
-    CREATE OR REPLACE VIEW analytics.acquisition_summary AS
-    SELECT 
-        acquisition_category,
-        COUNT(*) as customer_count,
-        AVG(days_to_first_purchase) as avg_days_to_purchase,
-        AVG(first_order_value) as avg_first_order_value,
-        ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) as percentage
-    FROM analytics.customer_acquisition
-    GROUP BY acquisition_category
-    ORDER BY 
-        CASE acquisition_category
-            WHEN 'Same Day' THEN 1
-            WHEN 'Within Week' THEN 2  
-            WHEN 'Within Month' THEN 3
-            WHEN 'After Month' THEN 4
-            WHEN 'No Purchase' THEN 5
-        END;
-    """)
-    
-    views = [
-        ("Executive Summary", exec_summary_sql),
-        ("Top Products", top_products_sql),
-        ("Customer Segmentation", customer_segments_sql),
-        ("Seasonal Performance", seasonal_trends_sql),
-        ("Acquisition Summary", acquisition_summary_sql)
-    ]
-    
-    try:
-        with engine.begin() as conn:
-            for view_name, view_sql in views:
-                conn.execute(view_sql)
-                logging.info(f"Created view: {view_name}")
-        
-        logging.info("Business summary views created successfully")
-        
-    except Exception as e:
-        logging.error(f"Failed to create summary views: {e}")
-        raise
-    finally:
-        engine.dispose()
-
 def create_monthly_trends():
     """Create monthly sales trends for seasonal analysis"""
     logging.info("Creating monthly sales trends...")
@@ -504,29 +328,136 @@ def create_campaign_attribution():
         pass
     finally:
         engine.dispose()
-    """Basic validation of analytics outputs"""
-    logging.info("Running analytics data validation...")
+
+def create_business_summary_views():
+    """Create summary views for dashboard consumption"""
+    logging.info("Creating business summary views...")
     
     engine = get_db_connection()
     
-    validation_checks = [
-        "SELECT COUNT(*) as customer_metrics_count FROM analytics.customer_metrics;",
-        "SELECT COUNT(*) as product_metrics_count FROM analytics.product_metrics;",
-        "SELECT COUNT(*) as daily_sales_count FROM analytics.daily_sales;",
-        "SELECT SUM(total_revenue) as total_platform_revenue FROM analytics.daily_sales;",
-        "SELECT AVG(churn_risk_score) as avg_churn_risk FROM analytics.customer_metrics;"
+    # Create a view for executive dashboard
+    exec_summary_sql = text("""
+    CREATE OR REPLACE VIEW analytics.executive_summary AS
+    SELECT 
+        COUNT(DISTINCT cm.customer_id) as total_customers,
+        COUNT(DISTINCT CASE WHEN cm.churn_risk_score < 0.5 THEN cm.customer_id END) as active_customers,
+        SUM(cm.total_spent) as total_revenue,
+        AVG(cm.avg_order_value) as avg_order_value,
+        COUNT(DISTINCT pm.product_id) as total_products,
+        AVG(pm.profit_margin) as avg_profit_margin,
+        COUNT(DISTINCT ds.sales_date) as days_with_sales,
+        MAX(ds.sales_date) as last_sales_date
+    FROM analytics.customer_metrics cm
+    CROSS JOIN analytics.product_metrics pm
+    CROSS JOIN analytics.daily_sales ds;
+    """)
+    
+    # Create a view for top performing products
+    top_products_sql = text("""
+    CREATE OR REPLACE VIEW analytics.top_products AS
+    SELECT 
+        p.product_id,
+        p.product_name,
+        p.category,
+        pm.total_revenue,
+        pm.total_quantity_sold,
+        pm.profit_margin,
+        RANK() OVER (ORDER BY pm.total_revenue DESC) as revenue_rank
+    FROM warehouse.dim_products p
+    JOIN analytics.product_metrics pm ON p.product_id = pm.product_id
+    WHERE p.is_current = true
+    ORDER BY pm.total_revenue DESC
+    LIMIT 20;
+    """)
+    
+    # Create customer segmentation view
+    customer_segments_sql = text("""
+    CREATE OR REPLACE VIEW analytics.customer_segmentation AS
+    SELECT 
+        customer_segment,
+        COUNT(*) as customer_count,
+        SUM(total_spent) as segment_revenue,
+        AVG(total_spent) as avg_customer_value,
+        AVG(churn_risk_score) as avg_churn_risk
+    FROM analytics.customer_metrics
+    GROUP BY customer_segment
+    ORDER BY segment_revenue DESC;
+    """)
+    
+    # Create seasonal trends view
+    seasonal_trends_sql = text("""
+    CREATE OR REPLACE VIEW analytics.seasonal_performance AS
+    SELECT 
+        quarter,
+        SUM(total_revenue) as quarter_revenue,
+        AVG(total_revenue) as avg_monthly_revenue,
+        SUM(total_orders) as quarter_orders,
+        AVG(avg_order_value) as avg_order_value
+    FROM analytics.monthly_trends
+    GROUP BY quarter
+    ORDER BY quarter;
+    """)
+    
+    # Create acquisition summary view  
+    acquisition_summary_sql = text("""
+    CREATE OR REPLACE VIEW analytics.acquisition_summary AS
+    SELECT 
+        acquisition_category,
+        COUNT(*) as customer_count,
+        AVG(days_to_first_purchase) as avg_days_to_purchase,
+        AVG(first_order_value) as avg_first_order_value,
+        ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) as percentage
+    FROM analytics.customer_acquisition
+    GROUP BY acquisition_category
+    ORDER BY 
+        CASE acquisition_category
+            WHEN 'Same Day' THEN 1
+            WHEN 'Within Week' THEN 2  
+            WHEN 'Within Month' THEN 3
+            WHEN 'After Month' THEN 4
+            WHEN 'No Purchase' THEN 5
+        END;
+    """)
+    
+    # CREATE PUBLIC SCHEMA VIEWS FOR LOOKER STUDIO
+    public_views_sql = text("""
+    -- Create views in public schema for Looker Studio access
+    CREATE OR REPLACE VIEW public.customer_metrics AS SELECT * FROM analytics.customer_metrics;
+    CREATE OR REPLACE VIEW public.product_metrics AS SELECT * FROM analytics.product_metrics;
+    CREATE OR REPLACE VIEW public.daily_sales AS SELECT * FROM analytics.daily_sales;
+    CREATE OR REPLACE VIEW public.monthly_trends AS SELECT * FROM analytics.monthly_trends;
+    CREATE OR REPLACE VIEW public.customer_acquisition AS SELECT * FROM analytics.customer_acquisition;
+    CREATE OR REPLACE VIEW public.campaign_attribution AS SELECT * FROM analytics.campaign_attribution;
+    
+    -- Create views for key warehouse tables
+    CREATE OR REPLACE VIEW public.dim_customers AS SELECT * FROM warehouse.dim_customers WHERE is_current = true;
+    CREATE OR REPLACE VIEW public.dim_products AS SELECT * FROM warehouse.dim_products WHERE is_current = true;
+    CREATE OR REPLACE VIEW public.fact_orders AS SELECT * FROM warehouse.fact_orders;
+    
+    -- Grant permissions
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO analytics_user;
+    GRANT USAGE ON SCHEMA public TO analytics_user;
+    """)
+    
+    views = [
+        ("Executive Summary", exec_summary_sql),
+        ("Top Products", top_products_sql),
+        ("Customer Segmentation", customer_segments_sql),
+        ("Seasonal Performance", seasonal_trends_sql),
+        ("Acquisition Summary", acquisition_summary_sql),
+        ("Public Schema Views", public_views_sql)
     ]
     
     try:
-        with engine.connect() as conn:  # No begin() needed for read-only
-            for check in validation_checks:
-                result = conn.execute(text(check)).fetchone()
-                logging.info(f"Analytics validation: {check} -> {result[0]}")
+        with engine.begin() as conn:
+            for view_name, view_sql in views:
+                conn.execute(view_sql)
+                logging.info(f"Created view: {view_name}")
         
-        logging.info("Analytics data validation completed successfully")
+        logging.info("Business summary views created successfully")
         
     except Exception as e:
-        logging.error(f"Analytics validation failed: {e}")
+        logging.error(f"Failed to create summary views: {e}")
         raise
     finally:
         engine.dispose()
@@ -543,6 +474,7 @@ def validate_analytics_data():
         "SELECT COUNT(*) as daily_sales_count FROM analytics.daily_sales;",
         "SELECT COUNT(*) as monthly_trends_count FROM analytics.monthly_trends;",
         "SELECT COUNT(*) as customer_acquisition_count FROM analytics.customer_acquisition;",
+        "SELECT COUNT(*) as campaign_attribution_count FROM analytics.campaign_attribution;",
         "SELECT SUM(total_revenue) as total_platform_revenue FROM analytics.daily_sales;",
         "SELECT AVG(churn_risk_score) as avg_churn_risk FROM analytics.customer_metrics;",
         "SELECT AVG(days_to_first_purchase) as avg_days_to_first_purchase FROM analytics.customer_acquisition WHERE days_to_first_purchase IS NOT NULL;"
@@ -593,9 +525,9 @@ create_customer_acquisition_task = PythonOperator(
     dag=dag
 )
 
-create_campaign_roi_task = PythonOperator(
-    task_id='create_marketing_campaign_roi',
-    python_callable=create_marketing_campaign_roi,
+create_campaign_attribution_task = PythonOperator(
+    task_id='create_campaign_attribution',
+    python_callable=create_campaign_attribution,
     dag=dag
 )
 
@@ -614,5 +546,5 @@ validate_analytics_task = PythonOperator(
 # Set task dependencies - Simplified for initial load
 [create_customer_metrics_task, create_product_metrics_task] >> create_daily_sales_task
 create_daily_sales_task >> [create_monthly_trends_task, create_customer_acquisition_task]
-[create_monthly_trends_task, create_customer_acquisition_task] >> create_campaign_roi_task
-create_campaign_roi_task >> create_views_task >> validate_analytics_task
+[create_monthly_trends_task, create_customer_acquisition_task] >> create_campaign_attribution_task
+create_campaign_attribution_task >> create_views_task >> validate_analytics_task
