@@ -248,6 +248,8 @@ ecommerce_analytics_engineering/
 │   ├── README.md
 │   ├── ARCHITECTURE.md
 │   ├── Ecommerce_Customer_Analysis_Looker_Dashboards.pdf
+├── dashboards/
+│   ├── Ecommerce_Customer_Analysis_Looker_Dashboards.pdf
 ├── docker-compose.yml
 └── .gitignore
 ```
